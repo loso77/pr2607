@@ -1,5 +1,5 @@
-const CACHE='pr2607-v1';
-const FILES=['./PR2607查询系统.html'];
+const CACHE='pr2607-v2';
+const FILES=['./index.html'];
 self.addEventListener('install',e=>{
   e.waitUntil(caches.open(CACHE).then(c=>c.addAll(FILES)));
   self.skipWaiting();
