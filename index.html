@@ -331,6 +331,43 @@ button:active { background: #1547b8; }
   background-position: right 14px center;
 }
 .station-select:focus { border-color: #1a56db; }
+.station-time-row { margin-top: 12px; }
+.station-time-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: #718096;
+  margin-bottom: 6px;
+}
+.station-time-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.station-time-select {
+  flex: 1;
+  min-width: 0;
+  border: 2px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-size: 17px;
+  font-weight: 600;
+  color: #2d3748;
+  background: #fff;
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+  text-align: center;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23718096' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+}
+.station-time-select:focus { border-color: #1a56db; }
+.station-time-colon {
+  color: #718096;
+  font-size: 20px;
+  font-weight: 700;
+}
 .station-result {
   margin-top: 14px;
 }
@@ -595,6 +632,18 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       <option value="">— 选择到站站点（可选）—</option>
     </select>
   </div>
+  <div class="station-time-row">
+    <span class="station-time-label">指定查询时间（适用于表号、车次和站点；都不选则使用当前时间）</span>
+    <div class="station-time-controls">
+      <select id="stationHour" class="station-time-select" aria-label="小时" onchange="query()">
+        <option value="">小时</option>
+      </select>
+      <span class="station-time-colon">:</span>
+      <select id="stationMinute" class="station-time-select" aria-label="分钟" onchange="query()">
+        <option value="">分钟</option>
+      </select>
+    </div>
+  </div>
     <div class="import-section">
       <div class="data-source" id="dataSource">当前数据：内置运行图 (PR2607)</div>
       <label class="import-btn">
@@ -609,7 +658,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
 
   <div class="card-right">
   <div id="result"></div>
-  <p class="hint" id="hint">输入<b>表号</b>(2~3位)或<b>车次</b>(4位)定位列车<br>可再选<b>到站站点</b>，查看到达该站的时刻</p>
+  <p class="hint" id="hint">输入<b>表号</b>(2~3位)或<b>车次</b>(4位)，可查询当前或指定时间的位置<br>也可只选择<b>站点和时间</b>，查询车站到发情况</p>
 
   </div><!-- /card-right -->
 </div>
@@ -637,6 +686,18 @@ let mode = 'weekday';           // 当前模式
 let DATA = BUILTIN_DATA;
 let EXTRA = BUILTIN_EXTRA_WD;  // 当前模式的加开车次数据        // 当前生效数据
 let DATA_NAME = STORE.weekday.defaultName;
+let hasActiveQuery = false;
+
+// 凌晨3点前仍按前一运营日判断平日/双休日
+function getServiceDayInfo(now = new Date()) {
+  const d = new Date(now.getTime());
+  if (d.getHours() < 3) d.setDate(d.getDate() - 1);
+  const pad = n => String(n).padStart(2, '0');
+  return {
+    key: d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()),
+    mode: (d.getDay() === 0 || d.getDay() === 6) ? 'weekend' : 'weekday'
+  };
+}
 
 // 各套数据的运行时缓存
 const loaded = { weekday: BUILTIN_DATA, weekend: BUILTIN_WEEKEND };
@@ -656,10 +717,16 @@ const loadedName = { weekday: STORE.weekday.defaultName, weekend: STORE.weekend.
       }
     } catch(e) {}
   }
-  // 恢复上次选择的模式
+  // 同一运营日恢复人工选择；新运营日按日期自动选择
   try {
+    const serviceDay = getServiceDayInfo();
     const lastMode = localStorage.getItem('pr_mode');
-    if (lastMode === 'weekend' || lastMode === 'weekday') mode = lastMode;
+    const lastModeDate = localStorage.getItem('pr_mode_date');
+    if (lastModeDate === serviceDay.key && (lastMode === 'weekend' || lastMode === 'weekday')) {
+      mode = lastMode;
+    } else {
+      mode = serviceDay.mode;
+    }
   } catch(e) {}
   applyMode(mode);
 })();
@@ -669,7 +736,10 @@ function applyMode(m) {
   DATA = loaded[m] || {};
   EXTRA = loadedExtra[m] || {};
   DATA_NAME = loadedName[m];
-  try { localStorage.setItem('pr_mode', m); } catch(e) {}
+  try {
+    localStorage.setItem('pr_mode', m);
+    localStorage.setItem('pr_mode_date', getServiceDayInfo().key);
+  } catch(e) {}
   // 更新标签高亮
   const wd = document.getElementById('tabWeekday');
   const we = document.getElementById('tabWeekend');
@@ -681,11 +751,15 @@ function applyMode(m) {
   // 切换模式时清空查询结果
   const res = document.getElementById('result');
   const hint = document.getElementById('hint');
+  hasActiveQuery = false;
   if (res) res.innerHTML = '';
   if (hint) hint.style.display = 'block';
 }
 
-function switchMode(m) { applyMode(m); }
+function switchMode(m) {
+  applyMode(m);
+  if (window.__stationOptionsReady) refreshStationOptions();
+}
 
 function updateDataLabel() {
   const el = document.getElementById('dataSource');
@@ -700,15 +774,18 @@ function updateDataLabel() {
 function parseWorkbook(workbook) {
   const grouped = {};
   const extras = {};
+  const stats = { added: 0, invalid: 0, candidate: 0, emptySheets: 0 };
   workbook.SheetNames.forEach(sheetName => {
     const ws = workbook.Sheets[sheetName];
     const rows = XLSX.utils.sheet_to_json(ws, {header:1, raw:false, defval:''});
-    if (rows.length < 2) return;
-    for (let i = 1; i < rows.length; i++) {
+    const before = stats.added;
+    // 不再固定跳过第一行：标题行会自动忽略，因此允许Excel前面增加说明行
+    for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
-      parseHalf(row, 1, 2, 3, 4, 5, 'down', sheetName, grouped, extras);
-      parseHalf(row, 10, 11, 12, 13, 14, 'up', sheetName, grouped, extras);
+      parseHalf(row, 1, 2, 3, 4, 5, 'down', sheetName, grouped, extras, stats);
+      parseHalf(row, 10, 11, 12, 13, 14, 'up', sheetName, grouped, extras, stats);
     }
+    if (stats.added === before) stats.emptySheets++;
   });
   Object.keys(grouped).forEach(t => {
     grouped[t].sort((a,b) => a.a < b.a ? -1 : (a.a > b.a ? 1 : 0));
@@ -716,36 +793,49 @@ function parseWorkbook(workbook) {
   Object.keys(extras).forEach(c => {
     extras[c].sort((a,b) => a.a < b.a ? -1 : (a.a > b.a ? 1 : 0));
   });
-  return { grouped, extras };
+  return { grouped, extras, stats };
 }
 
-function parseHalf(row, ci_train, ci_o, ci_e, ci_a, ci_p, dir, station, grouped, extras) {
+function safeImportedText(value) {
+  return String(value == null ? '' : value).trim()
+    .replace(/</g, '＜').replace(/>/g, '＞').replace(/&/g, '＆');
+}
+
+function parseHalf(row, ci_train, ci_o, ci_e, ci_a, ci_p, dir, station, grouped, extras, stats) {
   let id = String(row[ci_train] == null ? '' : row[ci_train]).trim();
-  if (!id || id === 'nan') return;
+  if (!id || /^(nan|车次|表号)$/i.test(id)) return;
+  if (!/^[0-9]+$/.test(id)) return;
+  stats.candidate++;
   let a = String(row[ci_a] == null ? '' : row[ci_a]).trim();
   let p = String(row[ci_p] == null ? '' : row[ci_p]).trim();
-  if (!a || !p || a === 'nan' || p === 'nan') return;
+  if (!a || !p || /^nan$/i.test(a) || /^nan$/i.test(p)) { stats.invalid++; return; }
   a = normTime(a); p = normTime(p);
-  if (!a || !p) return;
-  const o = String(row[ci_o]||'').trim();
-  const e = String(row[ci_e]||'').trim();
+  if (!a || !p) { stats.invalid++; return; }
+  const o = safeImportedText(row[ci_o]);
+  const e = safeImportedText(row[ci_e]);
+  const safeStation = safeImportedText(station);
 
-  if (id.length >= 5 && /^[0-9]+$/.test(id.slice(0,-4))) {
+  if (id.length >= 5 && /^[0-9]+$/.test(id.slice(0,-4)) && /^[0-9]{4}$/.test(id.slice(-4))) {
     // 正常：前缀表号 + 后4位车次
     const table = id.slice(0,-4), train = id.slice(-4);
     if (!grouped[table]) grouped[table] = [];
-    grouped[table].push({ s: station, d: dir, t: table, c: train, o, e, a, p });
-  } else if (id.length <= 2 && /^[0-9]+$/.test(id)) {
-    // 第一类：2位表号(轧道车，无车次)
-    const table = id.padStart(2,'0');
+    grouped[table].push({ s: safeStation, d: dir, t: table, c: train, o, e, a, p });
+    stats.added++;
+  } else if (id.length <= 3 && /^[0-9]+$/.test(id)) {
+    // 1~3位表号(轧道车或无车次记录)
+    const table = id.length < 2 ? id.padStart(2,'0') : id;
     if (!grouped[table]) grouped[table] = [];
-    grouped[table].push({ s: station, d: dir, t: table, c: '', o, e, a, p });
+    grouped[table].push({ s: safeStation, d: dir, t: table, c: '', o, e, a, p });
+    stats.added++;
   } else if (id.length === 4 && /^[0-9]+$/.test(id)) {
     // 第二类：4位车次，无表号(加开车)
     if (extras) {
       if (!extras[id]) extras[id] = [];
-      extras[id].push({ s: station, d: dir, t: '', c: id, o, e, a, p });
+      extras[id].push({ s: safeStation, d: dir, t: '', c: id, o, e, a, p });
+      stats.added++;
     }
+  } else {
+    stats.invalid++;
   }
 }
 
@@ -753,17 +843,39 @@ function normTime(t) {
   t = String(t).trim();
   if (/^[0-9]*\.?[0-9]+$/.test(t) && t.indexOf(':') === -1) {
     const f = parseFloat(t);
-    if (f >= 0 && f < 2) {
+    if (f >= 0 && f < 1) {
       let sec = Math.round(f * 86400);
+      if (sec >= 86400) sec = 0;
       const hh = String(Math.floor(sec/3600)).padStart(2,'0');
       const mm = String(Math.floor((sec%3600)/60)).padStart(2,'0');
       const ss = String(sec%60).padStart(2,'0');
       return hh+':'+mm+':'+ss;
     }
   }
-  const parts = t.split(':');
-  if (parts.length < 2) return '';
-  return String(parts[0]).padStart(2,'0')+':'+String(parts[1]).padStart(2,'0')+':'+String(parts[2]||'00').padStart(2,'0');
+  const m = t.match(/^(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?$/);
+  if (!m) return '';
+  const h = Number(m[1]), min = Number(m[2]), sec = Number(m[3] || 0);
+  if (h > 23 || min > 59 || sec > 59) return '';
+  return String(h).padStart(2,'0')+':'+String(min).padStart(2,'0')+':'+String(sec).padStart(2,'0');
+}
+
+// 三项要么全部保存，要么恢复原状，避免刷新后只剩“半套运行图”
+function saveScheduleAtomically(targetMode, grouped, extras, fileName) {
+  const keys = [STORE[targetMode].key, STORE[targetMode].key + '_extra', STORE[targetMode].name];
+  const oldValues = keys.map(k => localStorage.getItem(k));
+  const newValues = [JSON.stringify(grouped), JSON.stringify(extras), fileName];
+  try {
+    keys.forEach((k, i) => localStorage.setItem(k, newValues[i]));
+    return true;
+  } catch (err) {
+    try {
+      keys.forEach(k => localStorage.removeItem(k));
+      keys.forEach((k, i) => {
+        if (oldValues[i] !== null) localStorage.setItem(k, oldValues[i]);
+      });
+    } catch (rollbackErr) {}
+    return false;
+  }
 }
 
 function handleFile(input) {
@@ -782,24 +894,22 @@ function handleFile(input) {
       const parsed = parseWorkbook(wb);
       const grouped = parsed.grouped;
       const extras = parsed.extras;
+      const stats = parsed.stats;
       const tableCount = Object.keys(grouped).length;
-      if (tableCount === 0) {
-        statusEl.textContent = '⚠️ 未解析到有效数据，请检查文件格式';
+      if (tableCount === 0 || stats.added < 10) {
+        statusEl.textContent = '⚠️ 有效记录过少，请检查工作表名称和B—F、K—O列格式';
         statusEl.style.color = '#e53e3e';
         return;
       }
       loaded[targetMode] = grouped;
       loadedExtra[targetMode] = extras;
       loadedName[targetMode] = file.name;
-      let saved = true;
-      try {
-        localStorage.setItem(STORE[targetMode].key, JSON.stringify(grouped));
-        localStorage.setItem(STORE[targetMode].key + '_extra', JSON.stringify(extras));
-        localStorage.setItem(STORE[targetMode].name, file.name);
-      } catch(err) { saved = false; }
+      const saved = saveScheduleAtomically(targetMode, grouped, extras, file.name);
       if (targetMode === mode) { DATA = grouped; EXTRA = extras; DATA_NAME = file.name; }
       updateDataLabel();
-      statusEl.textContent = (saved ? '✅ ' : '⚠️ ') + modeLabel + '运行图导入成功：' + tableCount + ' 个表号' + (saved ? '，已保存' : '（数据过大未保存，下次需重导）');
+      if (window.__stationOptionsReady) refreshStationOptions();
+      const skipped = stats.invalid ? '，跳过 '+stats.invalid+' 条异常记录' : '';
+      statusEl.textContent = (saved ? '✅ ' : '⚠️ ') + modeLabel + '运行图导入成功：' + tableCount + ' 个表号、' + stats.added + ' 条记录' + skipped + (saved ? '，已完整保存' : '（存储空间不足，本次仅临时生效）');
       statusEl.style.color = saved ? '#38a169' : '#d69e2e';
     } catch(err) {
       statusEl.textContent = '❌ 解析失败：' + err.message;
@@ -836,14 +946,53 @@ function resetCurrent() {
 
 // 填充站点下拉菜单
 const STATIONS = ["福寿岭","苹果园", "古城", "八角游乐园", "八宝山", "玉泉路", "五棵松", "万寿路", "公主坟", "军事博物馆", "木樨地", "南礼士路", "复兴门", "西单", "天安门西", "天安门东", "王府井", "东单", "建国门", "永安里", "国贸", "大望路", "四惠", "四惠东", "高碑店", "传媒大学", "双桥", "管庄", "八里桥", "通州北苑", "果园", "九棵树", "梨园", "临河里", "土桥", "花庄", "环球度假区"];
-(function populateStations(){
+function refreshStationOptions() {
   const sel = document.getElementById('stationSelect');
   if (!sel) return;
-  STATIONS.forEach(s => {
+  const previous = sel.value;
+  const names = [...STATIONS];
+  const seen = new Set(names);
+  for (const rows of Object.values(DATA || {})) {
+    for (const r of rows) {
+      const s = String(r.s || '');
+      if (s && !seen.has(s) && !/(车辆段|段一|段二|古段|洞口|28G)/.test(s)) {
+        seen.add(s);
+        names.push(s);
+      }
+    }
+  }
+  sel.textContent = '';
+  const first = document.createElement('option');
+  first.value = '';
+  first.textContent = '— 选择到站站点（可选）—';
+  sel.appendChild(first);
+  names.forEach(s => {
     const opt = document.createElement('option');
     opt.value = s; opt.textContent = s;
     sel.appendChild(opt);
   });
+  if (seen.has(previous)) sel.value = previous;
+}
+refreshStationOptions();
+window.__stationOptionsReady = true;
+
+// 填充指定查询时间下拉菜单
+(function populateStationTime(){
+  const hour = document.getElementById('stationHour');
+  const minute = document.getElementById('stationMinute');
+  if (!hour || !minute) return;
+  for (let h = 0; h < 24; h++) {
+    const opt = document.createElement('option');
+    opt.value = String(h).padStart(2, '0');
+    opt.textContent = opt.value + '时';
+    hour.appendChild(opt);
+  }
+  for (let m = 0; m < 60; m++) {
+    const opt = document.createElement('option');
+    opt.value = String(m).padStart(2, '0');
+    opt.textContent = opt.value + '分';
+    minute.appendChild(opt);
+  }
 })();
 
 // 时钟
@@ -858,11 +1007,22 @@ function updateClock() {
 }
 updateClock();
 setInterval(updateClock, 1000);
+// 当前时间查询每5秒自动刷新；指定时间查询保持固定
+setInterval(() => {
+  if (!hasActiveQuery) return;
+  const hour = document.getElementById('stationHour').value;
+  const minute = document.getElementById('stationMinute').value;
+  if (!hour && !minute) query();
+}, 5000);
 updateDataLabel();
 
 function toSec(t) {
   const p = t.split(':').map(Number);
   return p[0]*3600 + p[1]*60 + (p[2]||0);
+}
+function isTimeInRange(sec, start, end, inclusive = true) {
+  if (start <= end) return inclusive ? (sec >= start && sec <= end) : (sec > start && sec < end);
+  return inclusive ? (sec >= start || sec <= end) : (sec > start || sec < end);
 }
 function nowSec() {
   const n = new Date();
@@ -880,14 +1040,55 @@ function dirTag(d) {
 
 
 
-// 站点实时看板：每方向显示 即将进站/停靠/已出站 各最近1趟（基于时刻表）
+// 读取通用查询时间：未填写时使用当前时间
+function getQueryTime() {
+  const hourInput = document.getElementById('stationHour');
+  const minuteInput = document.getElementById('stationMinute');
+  const hourRaw = hourInput ? hourInput.value : '';
+  const minuteRaw = minuteInput ? minuteInput.value : '';
+  if (!hourRaw && !minuteRaw) return { sec: nowSec(), text: nowStr(), custom: false };
+  if (!hourRaw || !minuteRaw) return null;
+  const h = Number(hourRaw), min = Number(minuteRaw);
+  if (h > 23 || min > 59) return null;
+  const pad = n => String(n).padStart(2, '0');
+  return { sec: h * 3600 + min * 60, text: pad(h)+':'+pad(min), custom: true };
+}
+
+// 站点看板：每方向显示 即将到达/正在停靠/已驶出 各最近1趟（基于时刻表）
 function showStationBoard(el, station) {
   if (!DATA || Object.keys(DATA).length === 0) {
     el.innerHTML = '<p class="error-msg">当前模式暂无运行图，请先导入</p>';
     return;
   }
-  const qs = nowSec();
-  const nt = nowStr();
+  const queryTime = getQueryTime();
+  if (!queryTime) {
+    el.innerHTML = '<p class="error-msg">请同时选择小时和分钟</p>';
+    return;
+  }
+  const qs = queryTime.sec;
+  const nt = queryTime.custom ? queryTime.text : queryTime.text.slice(0, 5);
+
+  // 支持“23:59到站、00:00发车”这种跨零点停站
+  function isStoppingAt(sec, r) {
+    const a = toSec(r.a), p = toSec(r.p);
+    return a <= p ? (a <= sec && sec <= p) : (sec >= a || sec <= p);
+  }
+
+  function isStopping(r) {
+    if (!queryTime.custom) return isStoppingAt(qs, r);
+    // 选择到“分”时，只要列车在这一分钟内到达或停靠，就算该分钟正在停靠
+    const minuteEnd = (qs + 59) % 86400;
+    const arrivalDistance = (toSec(r.a) - qs + 86400) % 86400;
+    return isStoppingAt(qs, r) || isStoppingAt(minuteEnd, r) || arrivalDistance <= 59;
+  }
+
+  function forwardDistance(t) {
+    return (toSec(t) - qs + 86400) % 86400;
+  }
+
+  function backwardDistance(t) {
+    return (qs - toSec(t) + 86400) % 86400;
+  }
 
   function dirData(d) {
     // 收集该站该方向所有停靠记录
@@ -897,26 +1098,31 @@ function showStationBoard(el, station) {
         if (r.s === station && r.d === d) recs.push(r);
       }
     }
-    recs.sort((a,b) => toSec(a.a) - toSec(b.a));
     let stop=null, app=null, leave=null;
+    let stopDistance=Infinity, appDistance=Infinity, leaveDistance=Infinity;
     for (const r of recs) {
-      if (toSec(r.a) <= qs && qs <= toSec(r.p)) { stop = r; break; }
+      if (isStopping(r)) {
+        const sd = isStoppingAt(qs, r) ? 0 : forwardDistance(r.a);
+        if (sd < stopDistance) { stopDistance = sd; stop = r; }
+      }
     }
     for (const r of recs) {
-      if (toSec(r.a) > qs) { app = r; break; }
-    }
-    for (const r of recs) {
-      if (toSec(r.p) < qs) leave = r;  // 持续更新到最后一个满足的
+      if (r === stop) continue;
+      const ad = forwardDistance(r.a);
+      if (ad > 0 && ad < appDistance) { appDistance = ad; app = r; }
+      const ld = backwardDistance(r.p);
+      if (ld > 0 && ld < leaveDistance) { leaveDistance = ld; leave = r; }
     }
     return { stop, app, leave };
   }
 
   function trainCell(r, type) {
     if (!r) return '<div class="bd-empty">—</div>';
+    const shortTime = t => String(t || '').slice(0, 5);
     let extra = '';
-    if (type === 'app')   extra = '<span class="bd-sub">到 ' + r.a + '</span>';
-    if (type === 'leave') extra = '<span class="bd-sub">发 ' + r.p + '</span>';
-    if (type === 'stop')  extra = '<span class="bd-sub">' + r.a + ' 到 / ' + r.p + ' 发</span>';
+    if (type === 'app')   extra = '<span class="bd-sub">到 ' + shortTime(r.a) + '</span>';
+    if (type === 'leave') extra = '<span class="bd-sub">发 ' + shortTime(r.p) + '</span>';
+    if (type === 'stop')  extra = '<span class="bd-sub">' + shortTime(r.a) + ' 到 / ' + shortTime(r.p) + ' 发</span>';
     return '<div class="bd-train">' +
            '<span class="bd-table">表'+r.t+'</span>' +
            '<span class="bd-no">'+r.c+'</span>' + extra + '</div>';
@@ -924,19 +1130,20 @@ function showStationBoard(el, station) {
 
   const up = dirData('up');
   const down = dirData('down');
+  const boardName = queryTime.custom ? '指定时间看板' : '实时看板';
 
 
   el.innerHTML =
     '<div class="divider"></div>' +
-    '<div class="bd-title">🚉 '+station+' 实时看板 <span class="bd-time">'+nt+'</span></div>' +
+    '<div class="bd-title">🚉 '+station+' '+boardName+' <span class="bd-time">'+nt+'</span></div>' +
     '<div class="bd-grid">' +
       '<div class="bd-col-head bd-up">上行</div>' +
       '<div class="bd-col-head bd-down">下行</div>' +
-      '<div class="bd-sec-t bd-grid-label">↓ 即将进站</div><div class="bd-sec-t bd-grid-label">↓ 即将进站</div>' +
+      '<div class="bd-sec-t bd-grid-label">↓ 即将到达</div><div class="bd-sec-t bd-grid-label">↓ 即将到达</div>' +
       '<div class="bd-cell">'+trainCell(up.app,'app')+'</div><div class="bd-cell">'+trainCell(down.app,'app')+'</div>' +
-      '<div class="bd-sec-t bd-grid-label">● 停靠</div><div class="bd-sec-t bd-grid-label">● 停靠</div>' +
+      '<div class="bd-sec-t bd-grid-label">● 正在停靠（已到达）</div><div class="bd-sec-t bd-grid-label">● 正在停靠（已到达）</div>' +
       '<div class="bd-cell">'+trainCell(up.stop,'stop')+'</div><div class="bd-cell">'+trainCell(down.stop,'stop')+'</div>' +
-      '<div class="bd-sec-t bd-grid-label">↑ 已出站</div><div class="bd-sec-t bd-grid-label">↑ 已出站</div>' +
+      '<div class="bd-sec-t bd-grid-label">↑ 已驶出</div><div class="bd-sec-t bd-grid-label">↑ 已驶出</div>' +
       '<div class="bd-cell">'+trainCell(up.leave,'leave')+'</div><div class="bd-cell">'+trainCell(down.leave,'leave')+'</div>' +
     '</div>';
 }
@@ -992,7 +1199,8 @@ function appendStation(el, raw, station, queryType) {
   const ups = recs.filter(r => r.d === 'up');
 
   // 找当前时间之后最早到达的一趟(上下行合起来)，用于高亮
-  const nowS = nowSec();
+  const selectedTime = getQueryTime();
+  const nowS = selectedTime ? selectedTime.sec : nowSec();
   let nextRec = null, nextSec = Infinity;
   for (const r of recs) {
     const aSec = toSec(r.a);
@@ -1023,10 +1231,15 @@ function appendStation(el, raw, station, queryType) {
 function clearAll() {
   const inp = document.getElementById('tableInput');
   const sel = document.getElementById('stationSelect');
+  const stationHour = document.getElementById('stationHour');
+  const stationMinute = document.getElementById('stationMinute');
   const res = document.getElementById('result');
   const hint = document.getElementById('hint');
   if (inp) inp.value = '';
   if (sel) sel.value = '';
+  if (stationHour) stationHour.value = '';
+  if (stationMinute) stationMinute.value = '';
+  hasActiveQuery = false;
   if (res) res.innerHTML = '';
   if (hint) hint.style.display = 'block';
   if (inp) inp.blur();
@@ -1042,13 +1255,22 @@ function query() {
     const stationSel0 = document.getElementById('stationSelect');
     const station0 = stationSel0 ? stationSel0.value : '';
     if (station0) {
+      hasActiveQuery = true;
       showStationBoard(el, station0);
     } else {
+      hasActiveQuery = false;
       el.innerHTML = '';
       hint.style.display = 'block';
     }
     return;
   }
+
+  if (!/^[0-9]{1,4}$/.test(raw)) {
+    hasActiveQuery = false;
+    el.innerHTML = '<p class="error-msg">请输入1～3位表号或4位车次，只能使用数字</p>';
+    return;
+  }
+  hasActiveQuery = true;
 
   // 尝试原始输入 / 补零两位
   const stationSel = document.getElementById('stationSelect');
@@ -1056,6 +1278,12 @@ function query() {
 
   if (!DATA || Object.keys(DATA).length === 0) {
     el.innerHTML = '<p class="error-msg">当前模式暂无运行图，请先点下方按钮导入</p>';
+    return;
+  }
+
+  const queryTime = getQueryTime();
+  if (!queryTime) {
+    el.innerHTML = '<p class="error-msg">请同时选择小时和分钟</p>';
     return;
   }
 
@@ -1096,7 +1324,7 @@ function query() {
     }
   }
 
-  const ns = nowSec(), nt = nowStr();
+  const ns = queryTime.sec, nt = queryTime.text;
 
   // 当日首班出库：第一条从车辆段始发的出库记录
   let firstDepartIdx = -1;
@@ -1146,16 +1374,34 @@ function query() {
     }
   }
 
+  // 指定时间只有“时、分”时，若这一整分钟内发生到站或停靠，优先显示该站。
+  // 这样 05:20:15 到站的列车在查询 05:20 时不会被误判为仍在前一区间。
+  function isStoppingForQuery(arrivalSec, departSec) {
+    if (!queryTime.custom) return isTimeInRange(ns, arrivalSec, departSec);
+    const minuteEnd = (ns + 59) % 86400;
+    const arrivalDistance = (arrivalSec - ns + 86400) % 86400;
+    return isTimeInRange(ns, arrivalSec, departSec) ||
+           isTimeInRange(minuteEnd, arrivalSec, departSec) ||
+           arrivalDistance <= 59;
+  }
+  const preferredMinuteStop = queryTime.custom
+    ? records.find(rec => isStoppingForQuery(toSec(rec.a), toSec(rec.p)))
+    : null;
+
   for (let i = 0; i < records.length; i++) {
     const r = records[i];
     const as = toSec(r.a), ds = toSec(r.p);
 
+    // 该分钟内存在到站/停靠时，先跳到该记录，避免前一段区间提前返回。
+    if (preferredMinuteStop && r !== preferredMinuteStop) continue;
+
     // 停靠在站
-    if (ns >= as && ns <= ds) {
+    if (isStoppingForQuery(as, ds)) {
+      const atDepot = isDepot(r.s);
       el.innerHTML = `
         <div class="divider"></div>
         <div class="query-tag">${queryType==='train' ? ('车次 '+raw+(window.__isExtraTrain ? ' · 无表号' : (' · 表号 '+r.t))) : ('表号 '+raw)}</div>
-        <div class="result-badge badge-stopping">● 当前停靠</div>
+        <div class="result-badge ${atDepot ? 'badge-depot' : 'badge-stopping'}">${atDepot ? (queryTime.custom ? '■ 位于车辆段' : '■ 当前位于车辆段') : (queryTime.custom ? '● 停靠车站' : '● 当前停靠')}</div>
         <div class="big-station">${dispName(r.s)}</div>
         <div class="route-row">
           ${dirTag(r.d)} ${dispName(r.o)} <span class="route-arrow">→</span> ${dispName(r.e)}
@@ -1180,8 +1426,9 @@ function query() {
         el.innerHTML = `
           <div class="divider"></div>
           <div class="query-tag">${queryType==='train' ? ('车次 '+raw+(window.__isExtraTrain ? ' · 无表号' : (' · 表号 '+r.t))) : ('表号 '+raw)}</div>
-          <div class="result-badge badge-none">○ 不在运营时段</div>
-          <p style="color:#4a5568;font-size:15px;margin-bottom:8px;">表号 <strong>${raw}</strong> 当前（${nt}）等待出库</p>
+          <div class="result-badge badge-depot">■ 位于车辆段</div>
+          <div class="big-station">${dispName(firstDepartRec.o)}</div>
+          <p style="color:#4a5568;font-size:15px;margin-bottom:8px;">表号 <strong>${raw}</strong> 在 ${nt} 等待出库</p>
           <div class="time-info">
             <div class="time-row"><span>运营开始${sd}</span><span class="time-val">${firstDepartRec.p}</span></div>
             <div class="time-row"><span>运营结束${ed}</span><span class="time-val">${endTime}</span></div>
@@ -1253,8 +1500,35 @@ function query() {
     }
   }
 
-  // 末班已回库判定：最后一条是车辆段回库点，且当前时间晚于回库到点
+  // 处理午夜前最后一站到午夜后第一站之间的连续运行
   const lastRec = records[records.length - 1];
+  const firstRec = records[0];
+  const crossStart = toSec(lastRec.p);
+  const crossEnd = toSec(firstRec.a);
+  const crossGap = (crossEnd - crossStart + 86400) % 86400;
+  if (crossGap > 0 && crossGap <= 2 * 3600 && isTimeInRange(ns, crossStart, crossEnd, false)) {
+    el.innerHTML = `
+      <div class="divider"></div>
+      <div class="query-tag">${queryType==='train' ? ('车次 '+raw+(window.__isExtraTrain ? ' · 无表号' : (' · 表号 '+lastRec.t))) : ('表号 '+raw)}</div>
+      <div class="result-badge badge-running">▶ 区间运行中</div>
+      <div class="between-wrap">
+        <div class="between-sta">${dispName(lastRec.s)}</div>
+        <div class="between-icon">→</div>
+        <div class="between-sta right">${dispName(firstRec.s)}</div>
+      </div>
+      <div class="route-row">
+        ${dirTag(lastRec.d)} ${dispName(lastRec.o)} <span class="route-arrow">→</span> ${dispName(lastRec.e)}
+      </div>
+      <div class="time-info">
+        <div class="time-row"><span>离开 ${dispName(lastRec.s)}</span><span class="time-val">${lastRec.p}</span></div>
+        <div class="time-row"><span>到达 ${dispName(firstRec.s)}</span><span class="time-val">${firstRec.a}</span></div>
+        <div class="time-row"><span>查询时刻</span><span class="time-val">${nt}</span></div>
+      </div>${depotInfo}`;
+    appendStation(el, raw, station, queryType);
+    return;
+  }
+
+  // 末班已回库判定：最后一条是车辆段回库点，且当前时间晚于回库到点
   if (isDepot(lastRec.s) && lastRec.e === lastRec.s && ns > toSec(lastRec.a)) {
     el.innerHTML = `
       <div class="divider"></div>
@@ -1282,7 +1556,7 @@ function query() {
     <div class="divider"></div>
     <div class="query-tag">${queryType==='train' ? ('车次 '+raw+(window.__isExtraTrain ? ' · 无表号' : '')) : ('表号 '+raw)}</div>
     <div class="result-badge badge-none">○ 不在运营时段</div>
-    <p style="color:#4a5568;font-size:15px;margin-bottom:8px;">表号 <strong>${raw}</strong> 当前（${nt}）无运行记录</p>
+    <p style="color:#4a5568;font-size:15px;margin-bottom:8px;">表号 <strong>${raw}</strong> 在 ${nt} 无运行记录</p>
     <div class="time-info">
       <div class="time-row"><span>运营开始${startDepot}</span><span class="time-val">${startTime}</span></div>
       <div class="time-row"><span>运营结束${endDepot}</span><span class="time-val">${endTime2}</span></div>
@@ -1301,9 +1575,13 @@ if (isIOS && !isStandalone) {
   document.getElementById('installBanner').style.display = 'block';
 }
 
-// Service Worker 注册
+// 网络正常时自动更新；弱网或断网时由 Service Worker 快速回退到最近缓存版本
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('sw.js').catch(()=>{});
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' })
+      .then(reg => reg.update())
+      .catch(()=>{});
+  });
 }
 
 
