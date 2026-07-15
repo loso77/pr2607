@@ -361,12 +361,25 @@ button:active { background: #1547b8; }
   background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23718096' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 10px center;
+  touch-action: none;
+  overscroll-behavior: contain;
+  user-select: none;
 }
 .station-time-select:focus { border-color: #1a56db; }
+.station-time-select.is-swiping {
+  border-color: #1a56db;
+  background-color: #eff6ff;
+}
 .station-time-colon {
   color: #718096;
   font-size: 20px;
   font-weight: 700;
+}
+.station-time-cycle-hint {
+  margin-top: 6px;
+  color: #718096;
+  font-size: 11px;
+  text-align: center;
 }
 .station-result {
   margin-top: 14px;
@@ -633,7 +646,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     </select>
   </div>
   <div class="station-time-row">
-    <span class="station-time-label">指定查询时间（适用于表号、车次和站点；都不选则使用当前时间）</span>
+    <span class="station-time-label">指定查询时间（只选小时按整点查询）</span>
     <div class="station-time-controls">
       <select id="stationHour" class="station-time-select" aria-label="小时" onchange="query()">
         <option value="">小时</option>
@@ -643,6 +656,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         <option value="">分钟</option>
       </select>
     </div>
+    <div class="station-time-cycle-hint">上下滑动可循环选择 · 都不选则使用当前时间</div>
   </div>
     <div class="import-section">
       <div class="data-source" id="dataSource">当前数据：内置运行图 (PR2607)</div>
@@ -993,6 +1007,74 @@ window.__stationOptionsReady = true;
     opt.textContent = opt.value + '分';
     minute.appendChild(opt);
   }
+
+  function bindCyclicPicker(select, max) {
+    let touchStartY = null;
+    let touchCurrentY = null;
+    let isSwiping = false;
+    const pad = n => String(n).padStart(2, '0');
+
+    function step(direction) {
+      let next;
+      if (select.value === '') {
+        next = direction < 0 ? max : 0;
+      } else {
+        next = (Number(select.value) + direction + max + 1) % (max + 1);
+      }
+      select.value = pad(next);
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+
+    select.addEventListener('wheel', event => {
+      event.preventDefault();
+      step(event.deltaY > 0 ? 1 : -1);
+    }, { passive: false });
+
+    select.addEventListener('keydown', event => {
+      if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+      event.preventDefault();
+      step(event.key === 'ArrowUp' ? -1 : 1);
+    });
+
+    select.addEventListener('touchstart', event => {
+      if (event.touches.length !== 1) return;
+      touchStartY = event.touches[0].clientY;
+      touchCurrentY = touchStartY;
+      isSwiping = false;
+    }, { passive: true });
+
+    select.addEventListener('touchmove', event => {
+      if (touchStartY === null || event.touches.length !== 1) return;
+      touchCurrentY = event.touches[0].clientY;
+      if (Math.abs(touchCurrentY - touchStartY) >= 10) {
+        isSwiping = true;
+        select.classList.add('is-swiping');
+        event.preventDefault();
+      }
+    }, { passive: false });
+
+    select.addEventListener('touchend', event => {
+      if (isSwiping && touchStartY !== null && touchCurrentY !== null) {
+        event.preventDefault();
+        step(touchCurrentY > touchStartY ? -1 : 1);
+        select.blur();
+      }
+      touchStartY = null;
+      touchCurrentY = null;
+      isSwiping = false;
+      select.classList.remove('is-swiping');
+    }, { passive: false });
+
+    select.addEventListener('touchcancel', () => {
+      touchStartY = null;
+      touchCurrentY = null;
+      isSwiping = false;
+      select.classList.remove('is-swiping');
+    });
+  }
+
+  bindCyclicPicker(hour, 23);
+  bindCyclicPicker(minute, 59);
 })();
 
 // 时钟
@@ -1047,8 +1129,8 @@ function getQueryTime() {
   const hourRaw = hourInput ? hourInput.value : '';
   const minuteRaw = minuteInput ? minuteInput.value : '';
   if (!hourRaw && !minuteRaw) return { sec: nowSec(), text: nowStr(), custom: false };
-  if (!hourRaw || !minuteRaw) return null;
-  const h = Number(hourRaw), min = Number(minuteRaw);
+  if (!hourRaw) return null;
+  const h = Number(hourRaw), min = minuteRaw ? Number(minuteRaw) : 0;
   if (h > 23 || min > 59) return null;
   const pad = n => String(n).padStart(2, '0');
   return { sec: h * 3600 + min * 60, text: pad(h)+':'+pad(min), custom: true };
@@ -1062,7 +1144,7 @@ function showStationBoard(el, station) {
   }
   const queryTime = getQueryTime();
   if (!queryTime) {
-    el.innerHTML = '<p class="error-msg">请同时选择小时和分钟</p>';
+    el.innerHTML = '<p class="error-msg">请先选择小时；只选择小时会按整点查询</p>';
     return;
   }
   const qs = queryTime.sec;
@@ -1283,7 +1365,7 @@ function query() {
 
   const queryTime = getQueryTime();
   if (!queryTime) {
-    el.innerHTML = '<p class="error-msg">请同时选择小时和分钟</p>';
+    el.innerHTML = '<p class="error-msg">请先选择小时；只选择小时会按整点查询</p>';
     return;
   }
 
